@@ -2,12 +2,11 @@ import os
 import shutil
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, simpledialog
 from ttkthemes import ThemedTk
 import threading
 import queue
 import json
-
 
 # Load categories from file
 default_path = str(Path.home()) + "\\Downloads"
@@ -15,7 +14,6 @@ try:
     with open('categories.json', 'r') as file:
         categories = json.load(file)
 except FileNotFoundError:
-    # If the file doesn't exist, use the default categories
     categories = {
         "Music": [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"],
         "Documents": [".doc", ".docx", ".pdf", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".rtf", ".tex",
@@ -34,32 +32,52 @@ try:
     with open('category_directories.json', 'r') as file:
         category_directories = json.load(file)
 except FileNotFoundError:
-    # If the file doesn't exist, use the default category directories
     category_directories = {category: os.path.join(default_path, category) for category in categories.keys()}
 
-# remaining part of the code
+def update_extensions(event):
+    """Update the extensions associated with a category."""
+    text_widget = event.widget
+    category = text_widget.category
+    new_extensions = text_widget.get(1.0, 'end-1c').split(", ")
+    categories[category] = new_extensions
 
-def select_directory(category, label):
-    """Open a directory selection dialog and set the chosen directory for the category."""
+    with open('categories.json', 'w') as file:
+        json.dump(categories, file)
+
+def change_downloads_directory(label):
+    """Open a directory selection dialog and set the chosen directory as the new downloads directory."""
+    global default_path  # Use the global default_path variable
     directory = filedialog.askdirectory()
     if directory:  # If a directory was chosen
-        # Move files from the old directory to the new one
+        # Update the downloads directory
+        default_path = directory
+        label.config(text=f"Current downloads directory: {default_path}")
+
+        # Update the category directories to the new downloads directory
+        category_directories = {category: os.path.join(default_path, category) for category in categories.keys()}
+
+        # Save the updated category_directories to a JSON file
+        with open('category_directories.json', 'w') as file:
+            # Add the default_path to the category directories
+            json.dump({**category_directories, "default_path": default_path}, file)
+
+def select_directory(category, label):
+    directory = filedialog.askdirectory()
+    if directory:
         old_directory = category_directories[category]
         for filename in os.listdir(old_directory):
             shutil.move(os.path.join(old_directory, filename), directory)
 
-        # Update the category directory
         category_directories[category] = directory
         label.config(text=directory)
 
-        # Save the updated category_directories to a JSON file
         with open('category_directories.json', 'w') as file:
             json.dump(category_directories, file)
 
 
 def sort_files(progress_queue, sorted_files_label, sort_button):
     """Sort the files in the Downloads directory."""
-    path = str(Path.home()) + "\\Downloads"
+    path = default_path  # Use the global default_path variable
 
     # Get the total number of files
     total_files = len([entry for entry in os.scandir(path) if entry.is_file()])
@@ -88,23 +106,75 @@ def sort_files(progress_queue, sorted_files_label, sort_button):
     sort_button.config(style='Sort.TButton')
     root.after(2000, lambda: sort_button.config(style='TButton'))  # Change it back to original color after 2 seconds
 
+def create_settings_frame(notebook):
+    settings_frame = ttk.Frame(notebook)
+    settings_notebook = ttk.Notebook(settings_frame)
+
+    downloads_dir_frame = ttk.Frame(settings_notebook)
+
+    downloads_dir_label = ttk.Label(downloads_dir_frame, text=f"Current downloads directory: {default_path}")
+    downloads_dir_label.pack(pady=10)
+
+    change_downloads_dir_button = ttk.Button(downloads_dir_frame, text="Change Downloads Directory",
+                                             command=lambda: change_downloads_directory(downloads_dir_label))
+    change_downloads_dir_button.pack()
+
+    settings_notebook.add(downloads_dir_frame, text='Downloads Directory')
+
+    rules_frame = ttk.Frame(settings_notebook)
+
+    for category, extensions in categories.items():
+        frame = ttk.Frame(rules_frame)
+        frame.pack(padx=10, pady=5, fill=tk.X)  # Fill horizontally for left alignment
+
+        text = tk.Text(frame, width=60, height=1, bd=0, bg="#add8e6", fg="black")  # Modified appearance
+        text.insert(1.0, ', '.join(extensions))
+        text.category = category
+        text.pack(side=tk.LEFT, padx=(0, 10), expand=True, fill=tk.X)  # Aligned to left with some padding
+        text.bind('<FocusOut>', update_extensions)
+
+        label = ttk.Label(frame, text=category)  # Added a label
+        label.pack(side=tk.RIGHT, padx=10)
+
+    settings_notebook.add(rules_frame, text='Rules')
+
+    settings_notebook.pack(expand=1, fill='both')
+
+    return settings_frame
+
+
+
+
+# imports and definitions stay the same until here...
+
 # Create the main window
 root = ThemedTk(theme="arc")  # Using the "arc" theme
 style = ttk.Style(root)
 style.configure('Sort.TButton', background='light green')
 
-# Create a frame and a button for each category
+notebook = ttk.Notebook(root)  # This is the container for tabs
+
+# Tab for Categories
+categories_frame = ttk.Frame(notebook)
+
 for category in categories.keys():
-    frame = ttk.Frame(root)
+    frame = ttk.Frame(categories_frame)
     frame.pack(padx=10, pady=5)
 
     label = ttk.Label(frame, text=category_directories[category], width=80)
     label.pack(side=tk.LEFT, padx=10)
 
-    button = ttk.Button(frame, text=f"Select directory for {category}", command=lambda category=category, label=label: select_directory(category, label))
+    button = ttk.Button(frame, text=f"Select directory for {category}",
+                        command=lambda category=category, label=label: select_directory(category, label))
     button.pack(side=tk.LEFT)
 
+notebook.add(categories_frame, text='Categories')
 
+# Tab for Settings
+settings_frame = create_settings_frame(notebook)
+notebook.add(settings_frame, text='Settings')
+
+notebook.pack(expand=1, fill='both')
 
 # Create a progress bar
 progress = ttk.Progressbar(root, length=400)
@@ -130,43 +200,6 @@ def update_progress(progress_queue, sorted_files_label):
         root.after(100, update_progress, progress_queue, sorted_files_label)
     except queue.Empty:
         pass  # If the queue is empty, do nothing
-
-def open_settings():
-    """Open the settings window."""
-    settings_window = tk.Toplevel(root)
-    settings_window.title("Settings")
-
-    # Create a frame and entry widgets for each category
-    for category, extensions in categories.items():
-        frame = ttk.Frame(settings_window)
-        frame.pack(padx=10, pady=5)
-
-        ttk.Label(frame, text=category).pack(side=tk.LEFT, padx=10)
-
-        entry = ttk.Entry(frame)
-        entry.insert(0, ', '.join(extensions))
-        entry.pack(side=tk.LEFT, padx=10)
-
-    ttk.Button(settings_window, text="Save", command=lambda: save_settings(settings_window)).pack(padx=10, pady=10)
-
-def save_settings(settings_window):
-    """Save the settings."""
-    for widget in settings_window.winfo_children():
-        if isinstance(widget, ttk.Frame):
-            category = widget.winfo_children()[0].cget("text")
-            extensions = widget.winfo_children()[1].get().split(', ')
-            categories[category] = extensions
-
-    # Save categories to file
-    with open('categories.json', 'w') as file:
-        json.dump(categories, file)
-
-    # Close the settings window
-    settings_window.destroy()
-
-# Create a button to open the settings
-settings_button = ttk.Button(root, text="Settings", command=open_settings)
-settings_button.pack(padx=10, pady=10)
 
 # Start the main loop
 root.mainloop()
